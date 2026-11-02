@@ -21,6 +21,9 @@ echo "$ADMINISTRATION_PORT" > "$here/app-port"
 first=${ADMINISTRATION_DEVICE_PORTS%-*} last=${ADMINISTRATION_DEVICE_PORTS#*-}
 claims=${TMPDIR:-/tmp}/phone-demo-claims
 mkdir -p "$claims"
+# A claim is a hint between rooms starting at once, and goes stale after
+# half an hour even while its room lives: the probe below (is the port
+# held, does adb list it) is what keeps two phones off one port.
 find "$claims" -mindepth 1 -maxdepth 1 -mmin +30 -exec rmdir {} + 2>/dev/null || true
 "$adb" start-server >/dev/null 2>&1 || true
 devices=$("$adb" devices 2>/dev/null | awk '{print $1}')

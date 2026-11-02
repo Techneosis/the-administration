@@ -2,13 +2,16 @@
 # Boots the room's phone on $port and opens the app: the part of start that
 # restart runs again. Sourced, with port, serial and here set.
 adb=$ANDROID_HOME/platform-tools/adb
+# The adb server first: adb scans only the low console ports itself, so an
+# emulator in the rooms' range is seen only when it registers with a
+# server already running (a restart may find the server gone).
+"$adb" start-server >/dev/null 2>&1 || true
 window=-no-window
 [ "${ADMINISTRATION_SHOW:-}" = 1 ] && window=
 "$ANDROID_HOME/emulator/emulator" -avd "$ADMINISTRATION_AVD" -read-only -no-snapshot \
   -no-audio -no-boot-anim $window -port "$port" >"$here/emulator.log" 2>&1 </dev/null &
 emu=$!
 
-"$adb" start-server >/dev/null 2>&1 || true
 for _ in $(seq 180); do
   [ "$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break
   kill -0 "$emu" 2>/dev/null || { tail -5 "$here/emulator.log" >&2; exit 1; }

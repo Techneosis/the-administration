@@ -665,7 +665,11 @@ func playwrightCLI() string {
 // Files a professional never reads and a handout never carries.
 var secretGlobs = []string{".env", ".env.*", ".envrc", ".npmrc", ".netrc", ".pypirc", ".dev.vars",
 	"*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*", "id_ecdsa*", "*.tfvars", "*.tfstate",
-	"credentials*.json", "secrets.*", "settings.local.json", ".git/config"}
+	"credentials*.json", "secrets.*", "settings.local.json", ".git/config",
+	// Signing keys and service credentials a mobile or cloud project keeps
+	// beside its code.
+	"*.p8", "*.jks", "*.keystore", "*service-account*.json", "GoogleService-Info.plist",
+	"google-services.json", ".aws/**"}
 
 // settingsFor is the wall in Claude Code's own terms. --restricted already
 // takes away every tool that runs commands, ignores the person's settings and
@@ -1164,7 +1168,7 @@ func runProfessional(ctx context.Context, c *contract, ci *castItem, pd, tag str
 		// The project as it was when the contract was placed, not the
 		// checkout someone may still be committing to.
 		var why string
-		if cwd, why = projectCopy(c, filepath.Dir(pd)); why != "" {
+		if cwd, why = projectCopy(c, filepath.Dir(pd)); why != "" && c.Commit != "" {
 			fmt.Fprintf(os.Stderr, "administration: %s\n", why)
 		}
 		args = append(args, "--tools", "Read,Grep,Glob")

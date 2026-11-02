@@ -245,7 +245,11 @@ commit it is: rebuild, or place the contract with `--build <sha>` to test
 that build on purpose. Read the commit from the build (a field your build
 stamps into the app, the artifact's own metadata), not from the checkout,
 or a stale artifact at a shared path passes as new. A screen whose setup
-says nothing is let in, shown as "build not reported".
+says nothing is let in, shown as "build not reported". `BUILD_COMMIT` is
+a commit's hash (whole or its first seven letters or more, `-dirty` on
+the end for a build from a changed tree, which is let in and said); a
+version or a tag from elsewhere is refused, since nothing can hold it to
+a commit.
 
 Better still, let the house build it: a `build` hook in the house builds
 a commit into a folder, once, in a clean checkout with the house's `env/`

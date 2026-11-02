@@ -279,16 +279,40 @@ changes" into CLI calls, and checks findings against the code afterwards.
   removed, the uncommitted files copied on top, never a secret), and
   critics work in that copy and verifiers read it, so a builder who keeps
   committing moves nothing under them, and NEW and OLD are judged against
-  the patch and the code as they were tested. A contract from before
-  this, or whose copy was pruned, gets one when verify runs (without the
-  uncommitted work if that has changed since, and it says so). Every room
+  the patch and the code as they were tested. The copy is made at place
+  when a critic needs it or there's uncommitted work (which can't be had
+  later); otherwise the commit is enough, and verify makes it once,
+  before any verifier starts (made by each, two at once once took it
+  from under each other). A pruned copy is made again the same way,
+  without the uncommitted work if that has changed since, and verify
+  says so. A contract that recorded no commit (placed before contracts
+  kept one, or outside git) has nothing to copy: verify says it reads
+  the project as it is now, and does.
+  What the copy costs: a clone that borrows the project's objects, so
+  the files of the tracked tree once per contract (tens of megabytes for
+  a few thousand files, made in well under a second), plus any
+  uncommitted files. It's kept with the contract until `prune` strips
+  the contract (reviewed, or older than its age). An uncommitted file over
+  8 MB is told apart by its size and time, not read, when the work is
+  hashed.
+  What the copy lacks: it's the commit's files and the uncommitted ones,
+  so nothing ignored (installed dependencies' type definitions, generated
+  code), no submodule's contents (their folders are empty) and, from a
+  clone that has no large-file objects, possibly not Git LFS content. A
+  critic asked how a library is used finds the calls, not the library;
+  that's the price of reading what was tested rather than whatever is on
+  disk now. Every room
   records its build (`builds` in the status): what equipment's setup
   says it installed (`BUILD_COMMIT=`, with `BUILD_APP=` and
   `BUILD_VERSION=`), the build hook's (below), or, for a web room, the
   checkout's HEAD while its setup ran, unless the manifest says otherwise
   (`"build"`). A build from another commit is refused, with the commit it
   is and how to test it on purpose: `place --build SHA`, which makes that
-  commit the one every room is held to. A build that names no commit is
+  commit the one every room is held to. Commits match on their common
+  first letters (at least seven), either way round, so `--build` with the
+  start of someone else's commit takes equipment that reports all of it;
+  something that isn't a commit (`v1.0`) is refused, asking for the hash.
+  A build marked `-dirty` is let in with that said. A build that names no commit is
   let in and shown as "build not reported" (only for equipment with a
   screen, since that's where an app is), and one of HEAD that may lack
   the uncommitted work is let in with that said. Git is only read: the
@@ -318,7 +342,8 @@ changes" into CLI calls, and checks findings against the code afterwards.
   the web setup, get `ADMINISTRATION_BUILD` (the path) and
   `ADMINISTRATION_BUILD_COMMIT`, and the room's build is recorded as the
   hook's, so it can't be the wrong one. A failed build fails the room with
-  its log's path. `administration build [REF]` runs it by hand (to try a
+  its log's path; prune clears failed builds, and a build's checkout left
+  by one killed outright, by the log's age. `administration build [REF]` runs it by hand (to try a
   hook, or build ahead); `prune` removes builds unused for its age. The
   hook builds commits, not working trees, because a cache keyed by
   anything less exact is a shared path again.

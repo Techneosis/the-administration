@@ -661,8 +661,15 @@ func placeContract(args []string, resumes string, placed func(id string)) error 
 		}
 	}
 	// Critics read the project as it was when the contract was placed, and
-	// so do the verifiers after: a copy at the tested commit.
-	if sha := c.tested(); sha != "" {
+	// so do the verifiers after: a copy at the tested commit. Made now when
+	// a critic needs it, or when there's uncommitted work (which can't be
+	// had later); otherwise the commit is enough, and verify makes the copy
+	// if it runs.
+	critics := false
+	for _, p := range c.Professionals {
+		critics = critics || p.Kind == "critic"
+	}
+	if sha := c.tested(); sha != "" && (critics || c.Work != "") {
 		p, err := makeCheckout(project, sha, c.Work, checkoutDir(dir))
 		if err != nil {
 			os.RemoveAll(dir)

@@ -93,21 +93,71 @@ class Provenance(Base):
         self.assertEqual(seen[0]["tested_commit"], c["commit"])
         self.assertEqual(open(os.path.join(seen[0]["project"], "app.txt")).read(), "one\n")
 
-    def test_a_contract_placed_before_its_copy_was_kept_gets_one_for_verify(self):
+    def test_a_pruned_copy_is_made_once_for_every_verifier(self):
+        # Four verifiers at once each made the copy, took it from under each
+        # other, and the losers read the project as it is now.
+        self.hire_file("reader", kind="critic")
+        cid = self.place("x", "--cast", "reader")
+        self.cli("wait", cid)
+        self.cli("close", cid)
+        checkout = os.path.join(self.books, "contracts", cid, ".checkout")
+        subprocess.run(["rm", "-rf", checkout], check=True)
+        write(os.path.join(self.project, "app.txt"), "moved on\n")
+        self.git("commit", "-qam", "later")
+        p = self.cli("verify", cid, "--batch", "1", env={"ADMINISTRATION_MATCH": "off"})
+        self.assertIn("2 verifiers", p.stdout)
+        self.assertNotIn("as it is now", p.stderr)
+        seen = [json.loads(l) for l in open(os.path.join(self.books, "contracts", cid, "fake-verifier-seen.jsonl"))]
+        self.assertEqual(len(seen), 2)
+        for v in seen:
+            self.assertEqual(os.path.realpath(v["project"]), os.path.realpath(checkout))
+        self.assertEqual(open(os.path.join(checkout, "app.txt")).read(), "one\n")
+        self.assertEqual([n for n in os.listdir(os.path.dirname(checkout)) if n.startswith(".checkout-")], [])
+
+    def test_a_contract_with_no_commit_says_verify_reads_the_project_as_it_is(self):
         self.hire_file("reader", kind="critic")
         cid = self.place("x", "--cast", "reader")
         self.cli("wait", cid)
         self.cli("close", cid)
         path = os.path.join(self.books, "contracts", cid, "contract.json")
         c = json.load(open(path))
-        subprocess.run(["rm", "-rf", os.path.join(self.books, "contracts", cid, ".checkout")], check=True)
-        del c["checkout"]
+        for k in ("commit", "checkout"):
+            del c[k]  # as a contract from before they were kept
         json.dump(c, open(path, "w"))
-        write(os.path.join(self.project, "app.txt"), "moved on\n")
-        self.git("commit", "-qam", "later")
+        p = self.cli("verify", cid, env={"ADMINISTRATION_MATCH": "off"})
+        self.assertIn("recorded no commit", p.stderr)
+        self.assertIn("reads the project as it is now", p.stderr)
+        self.assertNotIn("Tested build", self.cli("report", cid).stdout)
+
+    def test_the_copy_is_made_at_place_only_when_something_needs_it(self):
+        # Users only, on a clean tree: the commit is enough until verify.
+        self.phone(f"echo BUILD_COMMIT={self.head()}")
+        cid = self.place("x", "--cast", "thumb")
+        self.cli("wait", cid)
+        self.assertNotIn("checkout", self.contract(cid))
+        self.cli("close", cid)
         self.cli("verify", cid, env={"ADMINISTRATION_MATCH": "off"})
-        seen = [json.loads(l) for l in open(os.path.join(self.books, "contracts", cid, "fake-verifier-seen.jsonl"))]
-        self.assertEqual(open(os.path.join(seen[0]["project"], "app.txt")).read(), "one\n")
+        self.assertTrue(os.path.isdir(self.contract(cid)["checkout"]))
+        # Uncommitted work can't be had later: copied at place.
+        write(os.path.join(self.project, "app.txt"), "one\nwip\n")
+        self.phone(f"echo BUILD_COMMIT={self.head()}")
+        cid = self.place("x", "--cast", "thumb")
+        self.assertEqual(open(os.path.join(self.contract(cid)["checkout"], "app.txt")).read(), "one\nwip\n")
+        self.cli("wait", cid)
+
+    def test_signing_keys_and_service_credentials_stay_out_of_the_copy(self):
+        self.hire_file("reader", kind="critic")
+        for name in ("AuthKey_ABC123.p8", "app/release.keystore", "app/upload.jks", "app/service-account.json",
+                     "app/google-services.json", "ios/GoogleService-Info.plist", ".aws/credentials"):
+            write(os.path.join(self.project, name), "secret\n")
+        write(os.path.join(self.project, "app/kept.txt"), "fine\n")
+        cid = self.place("x", "--cast", "reader")
+        co = self.contract(cid)["checkout"]
+        found = sorted(os.path.relpath(os.path.join(d, f), co) for d, _, fs in os.walk(co) for f in fs)
+        self.assertEqual(found, ["app.txt", "app/kept.txt"])
+        self.cli("wait", cid)
+        deny = json.load(open(os.path.join(self.pdir(cid, "reader"), "settings.json")))["permissions"]["deny"]
+        self.assertIn("Read(**/*.p8)", deny)  # the wall knows them too
 
     def test_equipment_reports_its_build_and_the_contract_keeps_it(self):
         head = self.head()
@@ -139,6 +189,53 @@ class Provenance(Base):
         self.assertEqual(self.contract(cid)["build"], old)
         self.assertIn(f"Tested build: {old[:10]}, chosen with --build", self.cli("status", cid).stdout)
         self.assertIn("not a commit here", self.cli("place", "x", "--cast", "thumb", "--build", "nope!", check=1).stderr)
+
+    def test_a_short_build_matches_a_whole_one_either_way_round(self):
+        # --build with the start of someone else's commit, and equipment
+        # that reports all of it: the case --build is for.
+        foreign = "0123456789abcdef0123456789abcdef01234567"
+        self.phone(f"echo BUILD_COMMIT={foreign}")
+        cid = self.place("x", "--cast", "thumb", "--build", "0123456")
+        self.cli("wait", cid)
+        s = self.status(cid)["status"]["thumb"]
+        self.assertEqual(s["state"], "back", s)
+        self.assertEqual(s["builds"][0]["commit"], foreign)
+        self.cli("close", cid)
+        # Refused, the suggestion is the whole commit, which works.
+        cid = self.place("x", "--cast", "thumb", early=3)
+        self.cli("wait", cid, check=3)
+        self.assertIn(f"--build {foreign} to test", self.status(cid)["status"]["thumb"]["reason"])
+        self.cli("close", cid)
+        cid = self.place("x", "--cast", "thumb", "--build", foreign)
+        self.cli("wait", cid)
+        self.assertEqual(self.status(cid)["status"]["thumb"]["state"], "back")
+
+    def test_a_dirty_build_is_said_even_on_a_clean_contract(self):
+        self.phone(f"echo BUILD_COMMIT={self.head()[:9]}-dirty")
+        cid = self.place("x", "--cast", "thumb")
+        self.cli("wait", cid)
+        s = self.status(cid)["status"]["thumb"]
+        self.assertEqual(s["builds"][0]["note"], "built with uncommitted work, though the contract has none", s)
+
+    def test_a_build_that_isnt_a_commit_is_refused_asking_for_one(self):
+        self.phone("echo BUILD_COMMIT=v1.0")
+        cid = self.place("x", "--cast", "thumb", early=3)
+        self.cli("wait", cid, check=3)
+        reason = self.status(cid)["status"]["thumb"]["reason"]
+        self.assertIn('built from "v1.0", which isn\'t a commit', reason)
+        self.assertNotIn("--build v1.0", reason)
+
+    def test_a_web_room_whose_work_changed_while_it_built_says_so(self):
+        self.house()
+        self.hire_file("member")
+        hook = os.path.join(self.project, ".administration", "setup")
+        write(hook, open(hook).read().replace("set -e\n", "set -e\necho changed-during-setup >> \"$1/app.txt\"\n"), 0o755)
+        write(os.path.join(self.project, "app.txt"), "one\nwip\n")
+        cid = self.place("x", "--cast", "member")
+        self.cli("wait", cid)
+        b = self.status(cid)["status"]["member"]["builds"][0]
+        self.assertIn("the uncommitted work changed after the contract was placed", b["note"])
+        self.assertNotIn("without the uncommitted work", b["note"])
 
     def test_a_screen_build_that_says_nothing_is_kept_as_not_reported(self):
         self.phone("true")
@@ -352,6 +449,17 @@ class BuildHook(Base):
         self.assertIn(f"the build of {self.head[:10]} failed", reason)
         log = reason.rsplit("see ", 1)[1]
         self.assertIn("no sdk", open(log).read())
+
+    def test_prune_clears_failed_builds_and_a_killed_builds_checkout(self):
+        write(os.path.join(self.project, ".administration", "build"), "#!/bin/sh\nexit 1\n", 0o755)
+        self.cli("build", check=1)
+        root = os.path.join(self.books, "builds")
+        failed = [os.path.join(d, x) for d in [os.path.join(root, n) for n in os.listdir(root)] for x in os.listdir(d)]
+        self.assertEqual(len(failed), 1)
+        os.makedirs(os.path.join(failed[0], "src"))
+        write(os.path.join(failed[0], "src", ".env"), "MAPS_KEY=x\n")  # as one killed outright leaves it
+        self.cli("prune", "--older", "0h")
+        self.assertFalse(os.path.exists(failed[0]))
 
     def test_a_build_left_in_the_checkout_is_refused(self):
         write(os.path.join(self.project, ".administration", "build"), "#!/bin/sh\necho x > app.apk\necho \"$(pwd)/app.apk\"\n", 0o755)

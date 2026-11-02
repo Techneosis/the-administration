@@ -91,6 +91,13 @@ func cmdVerify(args []string) error {
 	}
 	fmt.Printf("Verifying %s%s on contract %s: %s, up to four at once.\n", plural(len(todo), "finding", "findings"), forLinks, c.ID, plural(len(batches), "verifier", "verifiers"))
 
+	// The copy of the project every verifier reads, made once before any
+	// starts: made by each, two at once took it from under each other, and
+	// the one that lost read the project as it is now.
+	code, why := projectCopy(c, dir)
+	if why != "" {
+		fmt.Fprintf(os.Stderr, "administration: %s\n", why)
+	}
 	var mu sync.Mutex
 	// Each batch goes into the books as it finishes, so stopping verify
 	// part way keeps every verifier that was done.
@@ -107,7 +114,7 @@ func cmdVerify(args []string) error {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			vs, why := verifyBatch(c, filepath.Join(dir, ".verify", strconv.Itoa(k+1)), b, model, coins)
+			vs, why := verifyBatch(c, code, filepath.Join(dir, ".verify", strconv.Itoa(k+1)), b, model, coins)
 			mu.Lock()
 			defer mu.Unlock()
 			if why != "" {
@@ -170,7 +177,7 @@ func cmdVerify(args []string) error {
 
 // verifyBatch runs one walled verifier on a batch and returns its verdicts,
 // or why it gave none. Its folder is kept when it fails.
-func verifyBatch(c *contract, rd string, batch []*summed, model string, coins time.Duration) (map[*summed]verdict, string) {
+func verifyBatch(c *contract, code, rd string, batch []*summed, model string, coins time.Duration) (map[*summed]verdict, string) {
 	if err := os.MkdirAll(rd, 0o700); err != nil {
 		return nil, err.Error()
 	}
@@ -201,10 +208,6 @@ func verifyBatch(c *contract, rd string, batch []*summed, model string, coins ti
 	// The project as it was tested, not as it is now: findings true of the
 	// tested commit were once checked false against a branch that had
 	// moved on.
-	code, why := projectCopy(c, filepath.Dir(filepath.Dir(rd)))
-	if why != "" {
-		fmt.Fprintf(os.Stderr, "administration: %s\n", why)
-	}
 	in := map[string]any{"project": code, "target": c.Target, "findings": items}
 	if t := c.tested(); t != "" && code != c.Project {
 		in["tested_commit"] = t

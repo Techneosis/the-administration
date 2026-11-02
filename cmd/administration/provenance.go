@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,10 @@ func short(sha string) string {
 }
 
 var hexRE = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// workHashWhole is the size past which an uncommitted file is hashed by its
+// size and modification time rather than read.
+const workHashWhole = 8 << 20
 
 // tested is the commit the contract is on: HEAD when it was placed. ""
 // outside git. The uncommitted work on top of it, if any, is Work.
@@ -167,10 +172,22 @@ func workHash(project string) (string, error) {
 	h := sha256.New()
 	add := func(base, f string) {
 		fmt.Fprintf(h, "%s\x00", f)
-		if b, err := os.ReadFile(filepath.Join(base, f)); err == nil {
-			h.Write(b)
-		} else {
+		p := filepath.Join(base, f)
+		st, err := os.Lstat(p)
+		switch {
+		case err != nil:
 			h.Write([]byte("\x00removed"))
+		case !st.Mode().IsRegular():
+			fmt.Fprintf(h, "\x00%v", st.Mode().Type())
+		case st.Size() > workHashWhole:
+			// A big file (a build, a dump) is known by its size and time,
+			// not read through on every room.
+			fmt.Fprintf(h, "\x00%d\x00%d", st.Size(), st.ModTime().UnixNano())
+		default:
+			if fh, err := os.Open(p); err == nil {
+				_, _ = io.Copy(h, fh)
+				fh.Close()
+			}
 		}
 		h.Write([]byte{0})
 	}
@@ -210,14 +227,23 @@ func overlayWork(project, dest, want string) error {
 		if !st.Mode().IsRegular() {
 			return nil // a link or a folder: not copied out of the project
 		}
-		b, err := os.ReadFile(src)
-		if err != nil {
-			return err
-		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, b, st.Mode().Perm()|0o600)
+		in, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, st.Mode().Perm()|0o600)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			out.Close()
+			return err
+		}
+		return out.Close()
 	}
 	for _, f := range changed {
 		if err := cp(filepath.Join(top, f), filepath.Join(dest, f)); err != nil {
@@ -250,28 +276,39 @@ func makeCheckout(project, sha, work, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-		return "", err
-	}
-	for _, args := range [][]string{
-		{"clone", "--quiet", "--shared", "--no-checkout", top, dest},
-		{"-C", dest, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", sha},
-	} {
-		if out, err := exec.Command("git", append(append([]string{}, gitSafe...), args...)...).CombinedOutput(); err != nil {
-			_ = os.RemoveAll(dest)
-			return "", fmt.Errorf("a checkout at %s: %v: %s", short(sha), err, strings.TrimSpace(string(out)))
-		}
-	}
-	_ = os.RemoveAll(filepath.Join(dest, ".git"))
-	if work != "" {
-		if err := overlayWork(project, dest, work); err != nil {
-			_ = os.RemoveAll(dest)
-			return "", err
-		}
-	}
 	rel, err := filepath.Rel(realPath(top), realPath(project))
 	if err != nil || strings.HasPrefix(rel, "..") {
 		rel = "."
+	}
+	if isDir(dest) {
+		return filepath.Join(dest, rel), nil // made already, by whoever got there first
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return "", err
+	}
+	// Made beside dest and renamed into place whole, so two at once can't
+	// meet in one folder, and a failure removes only its own.
+	tmp, err := os.MkdirTemp(filepath.Dir(dest), "."+filepath.Base(dest)+"-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp) // gone by then if the rename worked
+	for _, args := range [][]string{
+		{"clone", "--quiet", "--shared", "--no-checkout", top, tmp},
+		{"-C", tmp, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", sha},
+	} {
+		if out, err := exec.Command("git", append(append([]string{}, gitSafe...), args...)...).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("a checkout at %s: %v: %s", short(sha), err, strings.TrimSpace(string(out)))
+		}
+	}
+	_ = os.RemoveAll(filepath.Join(tmp, ".git"))
+	if work != "" {
+		if err := overlayWork(project, tmp, work); err != nil {
+			return "", err
+		}
+	}
+	if err := os.Rename(tmp, dest); err != nil && !isDir(dest) {
+		return "", err
 	}
 	return filepath.Join(dest, rel), nil
 }
@@ -281,15 +318,16 @@ func checkoutDir(dir string) string { return filepath.Join(dir, ".checkout") }
 
 // projectCopy is the folder critics and verifiers read as the project: the
 // contract's checkout at its tested commit, made now if it isn't there yet
-// (a contract placed before it was kept), or the project itself when there
-// is no commit to copy, or it can't be had (said in why).
+// (one placed with no critic, or pruned), or the project itself when there
+// is no commit to copy (a contract that recorded none), or it can't be had;
+// why says which.
 func projectCopy(c *contract, dir string) (path, why string) {
 	if c.Checkout != "" && isDir(c.Checkout) {
 		return c.Checkout, ""
 	}
 	sha := c.tested()
 	if sha == "" {
-		return c.Project, ""
+		return c.Project, "the contract recorded no commit (placed before contracts kept their commit, or outside git), so this reads the project as it is now"
 	}
 	if !isDir(c.Project) {
 		return c.Project, "the project is gone, so there's no copy of it at " + short(sha)
@@ -341,14 +379,35 @@ func checkBuild(c *contract, b roomBuild) (roomBuild, error) {
 		if r, err := git(c.Project, "rev-parse", "--verify", "--quiet", got+"^{commit}"); err == nil && r != "" {
 			full = r
 		}
+	} else if r, err := git(c.Project, "rev-parse", "--verify", "--quiet", got+"^{commit}"); err == nil && r != "" {
+		full = r // a tag or branch name this checkout knows
 	}
+	if !hexRE.MatchString(full) {
+		// Not a commit, and nothing here makes it one (a version, a tag
+		// from elsewhere): --build couldn't name it either.
+		return b, refusal{fmt.Sprintf("%s says it was built from %q, which isn't a commit: have its setup print BUILD_COMMIT= with the commit's hash (the one stamped in the build), and BUILD_VERSION= for a version", b.From, got)}
+	}
+	// One may be short and the other whole, either way round: --build with
+	// the first letters of someone else's commit, and equipment that reports
+	// all of it.
 	same := func(sha string) bool {
-		return sha != "" && (full == sha || len(got) >= 7 && strings.HasPrefix(sha, got))
+		if sha == "" {
+			return false
+		}
+		if full == sha {
+			return true
+		}
+		n := min(len(full), len(sha))
+		return n >= 7 && full[:n] == sha[:n]
 	}
-	switch {
-	case same(want):
+	if same(want) {
 		b.Commit = full
-		if c.Build == "" && c.Work != "" && !b.withWork {
+		switch {
+		case b.Note != "":
+			// The caller knows better (the work changed while it built).
+		case dirty && c.Work == "":
+			b.Note = "built with uncommitted work, though the contract has none"
+		case dirty || c.Build == "" && c.Work != "" && !b.withWork:
 			if dirty {
 				b.Note = "built with uncommitted work, which may not be the work under contract"
 			} else {
@@ -362,7 +421,7 @@ func checkBuild(c *contract, b roomBuild) (roomBuild, error) {
 		what = "the contract was placed to test " + short(want) + " (--build)"
 	}
 	return b, refusal{fmt.Sprintf("%s runs a build of %s, and %s: rebuild it from %s, or place the contract with --build %s to test that build on purpose",
-		b.From, short(got), what, short(want), short(got))}
+		b.From, short(full), what, short(want), full)}
 }
 
 // buildFromVars is the build an equipment's setup reported.

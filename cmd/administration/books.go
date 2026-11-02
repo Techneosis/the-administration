@@ -622,18 +622,34 @@ func cmdPrune(args []string) error {
 	}
 	// The build hook's builds, kept per commit: one nobody has used in the
 	// age goes (a contract on it again builds it again).
+	// A build that failed (a log, no artifact) or was killed before it
+	// could clean up (its checkout left, with the house's env/ copied in)
+	// goes by its log's age the same way, checkout first.
 	builds := 0
-	kept, _ := filepath.Glob(filepath.Join(books, "builds", "*", "*", "artifact"))
-	for _, a := range kept {
-		st, err := os.Stat(a)
+	kept, _ := filepath.Glob(filepath.Join(books, "builds", "*", "*"))
+	for _, d := range kept {
+		mark := filepath.Join(d, "artifact")
+		if _, err := os.Stat(mark); err != nil {
+			mark = filepath.Join(d, "build.log")
+		}
+		st, err := os.Stat(mark)
+		if err != nil {
+			st, err = os.Stat(d)
+		}
 		if err != nil || time.Since(st.ModTime()) <= older {
 			continue
 		}
+		if unlock, ok := tryLockFile(filepath.Join(d, ".lock")); !ok {
+			continue // building now
+		} else {
+			unlock()
+		}
 		if f.has("dry-run") {
-			fmt.Printf("would remove the build in %s\n", filepath.Dir(a))
+			fmt.Printf("would remove the build in %s\n", d)
 			continue
 		}
-		if os.RemoveAll(filepath.Dir(a)) == nil {
+		_ = os.RemoveAll(filepath.Join(d, "src"))
+		if os.RemoveAll(d) == nil {
 			builds++
 		}
 	}
