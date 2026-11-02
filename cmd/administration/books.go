@@ -613,14 +613,35 @@ func cmdPrune(args []string) error {
 					_ = os.RemoveAll(filepath.Join(dir, contractHandout))
 					_ = os.RemoveAll(filepath.Join(dir, ".verify")) // a failed verifier's or matcher's stream
 					_ = os.RemoveAll(filepath.Join(dir, ".match"))
+					_ = os.RemoveAll(checkoutDir(dir)) // the copy critics and verifiers read
 					_ = os.RemoveAll(filepath.Join(dir, "handout")) // where it was before 0.4
 					stripped++
 				}
 			}
 		}
 	}
+	// The build hook's builds, kept per commit: one nobody has used in the
+	// age goes (a contract on it again builds it again).
+	builds := 0
+	kept, _ := filepath.Glob(filepath.Join(books, "builds", "*", "*", "artifact"))
+	for _, a := range kept {
+		st, err := os.Stat(a)
+		if err != nil || time.Since(st.ModTime()) <= older {
+			continue
+		}
+		if f.has("dry-run") {
+			fmt.Printf("would remove the build in %s\n", filepath.Dir(a))
+			continue
+		}
+		if os.RemoveAll(filepath.Dir(a)) == nil {
+			builds++
+		}
+	}
 	if !f.has("dry-run") {
 		fmt.Printf("Pruned: %d contracts down to their summaries, %d removed (their numbers are in the ledger).\n", stripped, removed)
+		if builds > 0 {
+			fmt.Printf("Removed %s unused for %s.\n", plural(builds, "build", "builds"), map[bool]string{true: f.get("older"), false: "30d"}[f.has("older")])
+		}
 	}
 	return nil
 }

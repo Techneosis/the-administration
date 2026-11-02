@@ -107,15 +107,20 @@ hit a stub or ran out of coins says so. Silence is not a pass.
    files, lines, screens and widths, plus anyone fitting from the roster.
    You see the cast in a few lines and add or strike names.
 2. **Taken.** Each professional starts at once, in a session of its own.
-   Browser professionals each get a room first. The Administration runs
+   The contract is on a commit, and nobody works the wrong build: a room
+   whose app is another commit's is turned away at the door, and critics
+   read the project as it was placed. Browser professionals each get a
+   room first. The Administration runs
    every stay itself, to its coins, and keeps its log.
 3. **Worked.** You keep working. Claude waits in the background and checks
    in when they're back. In Herdr or tmux the watch panes show them at
    work; anywhere else, `administration watch`.
 4. **Closed.** The reports are merged into one summary, each finding once
-   with everyone who found it. Verifiers, walled like everyone else, check
-   each against the code and record the verdict in the books, beside the
-   finding; Claude reviews theirs and records where it disagrees. You hear what
+   with everyone who found it, under the build that was tested. Verifiers,
+   walled like everyone else, check each against the code as it was when
+   the contract was placed (the books keep a copy, so a branch that moved
+   on can't clear a real finding) and record the verdict in the books,
+   beside the finding; Claude reviews theirs and records where it disagrees. You hear what
    broke, how to see it and how sure we are. The rooms are cleared.
 5. **Open rooms.** If the contract needed someone nobody is, the summary
    says so and Claude offers the Director.
@@ -246,6 +251,8 @@ that persona a regular.
 .administration/
   setup            builds a room (needed for browser professionals)
   teardown         takes it down (optional)
+  build            builds what rooms install, once per commit (optional)
+  env/             the untracked config a clean checkout needs to build (optional)
   roster.toml      existing agents that join as critics; your own open rooms
   professionals/   your hires
   candidates/      the Director's trainees, waiting for /hire
@@ -339,6 +346,23 @@ folder. It must:
   real data, so it's on record. Each room gets its own copy, thrown away
   with the room.
 
+  **Which build.** The contract is on a commit, and the manifest can say
+  which one the app was built from (`"build": "<sha>"`); without it, the
+  room is held to the checkout's HEAD while the setup ran. A checkout that
+  moved on since the contract was placed is refused at the door.
+
+**The build hook.** A room is only as true as what it installs. A house
+whose rooms install a build (a phone app, a desktop bundle) can let the
+Administration make it: **`build COMMIT OUT`** runs as you, once per
+commit, in a clean checkout of that commit with the house's `env/` copied
+in at the same paths (the `.env` or `local.properties` nobody commits, so a
+build never ships without its map key again). It puts its build in OUT and
+prints its path last. Every room of the contract, and the next contract on
+the same commit, gets that one build as `$ADMINISTRATION_BUILD`, with
+`$ADMINISTRATION_BUILD_COMMIT`; its setup installs it. Uncommitted work is
+built too, kept apart under its own hash. `administration build` tries the
+hook; builds stay in the books until `prune` finds them unused.
+
 `examples/demo/` is a complete house: a small app, its setup hook and two
 professionals. Try it with `administration place "sign up" --cast
 newcomer,reader --project examples/demo`.
@@ -400,7 +424,8 @@ instead: never dropped, never counted.
 | command | does |
 |---|---|
 | `administration roster [--match tags] [--json] [--project DIR]` | who's hired, what they know, the open rooms; `--match` drafts a cast |
-| `administration place TARGET --cast a,b \| --with RUN [--coins 10m] [--model M] [--changes [--base REF]] [--brief NAME=TASK] [--only NAME=TASK] [--data NAME] [--project DIR] [--dry-run] [--show-browsers] [--no-watch] [--no-before]` | places a contract and prints its id; `--brief` gives one professional their own task on top of their persona's checks, `--only` instead of them; `--show-browsers` opens the users' browsers as windows on your screen, to watch them work. Exits 4 when there aren't enough free rooms for its users now |
+| `administration place TARGET --cast a,b \| --with RUN [--coins 10m] [--model M] [--changes [--base REF]] [--brief NAME=TASK] [--only NAME=TASK] [--data NAME] [--project DIR] [--dry-run] [--show-browsers] [--no-watch] [--no-before] [--build SHA]` | places a contract on the project's HEAD (and any uncommitted work) and prints its id; a room whose build is another commit's is refused, unless `--build` names that commit on purpose; `--changes` warns when the branch is missing commits the local default branch has; `--brief` gives one professional their own task on top of their persona's checks, `--only` instead of them; `--show-browsers` opens the users' browsers as windows on your screen, to watch them work. Exits 4 when there aren't enough free rooms for its users now |
+| `administration build [REF]` | the house's build hook's build of REF (HEAD by default), from the books or made now; prints its path |
 | `administration wait ID [--timeout 3h]` | waits until everyone is back or out of coins, with a line as each one's state changes; returns early (2, or 3 if refused) when one fails while others still work |
 | `administration status [ID] [--json]` | who's working and who's back; with no ID, every open contract and a `Rooms:` line saying how many are free |
 | `administration close ID [--keep]` | stops anyone still working, merges the reports, puts the Director's specialists who found something on the roster and clears the rooms; prints the summary's path |

@@ -2377,18 +2377,21 @@ class NeverWritesGit(Base):
         for cid in self.glob_contracts():
             self.cli("wait", cid, env=env)
             self.cli("close", cid, env=env)
-        reads = {"rev-parse", "merge-base", "diff", "ls-files"}
+        # rev-list, symbolic-ref and a bare "remote" list for place's base
+        # check; nothing that writes.
+        reads = {"rev-parse", "merge-base", "diff", "ls-files", "rev-list", "symbolic-ref"}
         cloned = False
         for line in open(log).read().splitlines():
             # The release check's before copy: a clone made in a room, and a
             # checkout inside it. The project's repo is only read.
-            if line.startswith("clone ") and line.split()[-1].startswith(self.rooms):
+            # And the contract's copy of the project, a clone in the books.
+            words = [w for w in line.split() if not w.startswith("-") and "=" not in w]
+            if words[:1] == ["clone"] and line.split()[-1].startswith((self.rooms, self.books)):
                 cloned = True
                 continue
-            if line.startswith(f"-C {self.rooms}"):
+            if f"-C {self.rooms}" in line or f"-C {self.books}" in line:
                 continue
-            words = [w for w in line.split() if not w.startswith("-") and "=" not in w]
-            if words[:2] == ["remote", "get-url"]:  # finding a house kept on the machine
+            if words[:2] == ["remote", "get-url"] or words == ["remote"]:  # a house kept on the machine; the remotes' names
                 continue
             self.assertIn(words[0], reads, f"git {line}")
         self.assertTrue(cloned)

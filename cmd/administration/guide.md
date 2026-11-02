@@ -57,6 +57,19 @@ The commands are namespaced by the plugin: `/the-administration:contract`,
    about changes ("these changes", "my branch"), the contract is on the
    changes: add `--changes` (and `--base REF` if they name a base). With
    nothing changed it exits 1 with "nothing has changed since ..."; say so.
+   **Watch place's warnings about the base**: "this branch is missing N
+   commits that main has" or "local main is N commits ahead of
+   origin/main" means what's tested lacks work already done, and a bug
+   that work fixed will come back as a finding. Tell the person before
+   the contract runs long, and offer to rebase or place again with
+   `--base main`.
+   **The contract is on a commit**: the project's HEAD when it's placed,
+   with any uncommitted work ("Tested build" in `status` and the summary).
+   A room whose app was built from another commit is refused (exit 3) with
+   the commit it is. Don't work around it: rebuild, or, when the person
+   means to test that build, place again with `--build <sha>`. Don't
+   commit to the branch while its contract runs expecting the rooms to
+   follow: a web room built after HEAD moved is refused too.
 2. **Have the Director cast it** (the default for any contract worth
    doing): run `administration director cast "<target>" [--changes]` with
    `run_in_background`. The Director reads the code in scope, the recent
@@ -256,8 +269,22 @@ When the wait finishes:
    command), list the confirmed findings worth keeping as candidates for it.
    Don't run it yourself.
 
+**Which build was tested**: the summary opens with "Tested build" and,
+for each room, the build it ran ("thumb's room ran phone: a1b2c3d (app
+1.4.0)"). Name the tested build in your report. A room whose build says
+"build not reported" or "without the uncommitted work" was let in on
+trust: say so, and weigh its findings. Verifiers and critics read a copy
+of the project as it was placed, so check a finding against the tested
+commit too (`git show <sha>:<file>`), never only the branch tip, which
+may have moved on since.
+
+**Equipment restarted**: equipment with a `restart` hook is booted again
+once when its screen stops answering; the professional is told and
+carries on, and the status says "equipment restarted at HH:MM". Say so if
+their findings around that time look odd.
+
 **Equipment lost**: a professional whose device died mid-contract (three
-failed screenshots in a row) is told to stop and write what's left as
+failed screenshots in a row, after its one restart if it has one) is told to stop and write what's left as
 unreached, and marked "equipment lost at HH:MM"; their part is partial. Say so, and offer `administration resume
 <id> <name>`: a new contract for them with only what they couldn't reach
 (their whole part again when they wrote nothing down). It also picks up
@@ -327,7 +354,19 @@ step after writes there and not into the project.
    `administration equipment-check <name>`** (in the background): it
    starts it in a fresh room, says what its setup printed, takes one
    picture through a screen and clears it away. Fix and run it again until
-   it passes. Equipment that points an app off this machine is refused
+   it passes. **Make the build known** (docs/equipment.md, Which build):
+   a setup that installs an app prints `BUILD_COMMIT=` (read from the
+   build, not the checkout), `BUILD_APP=` and `BUILD_VERSION=`, and
+   uninstalls any app it didn't install; better, the house's `build`
+   hook builds each commit in a clean checkout with its `env/` (README,
+   The build hook) and the setup installs `$ADMINISTRATION_BUILD`. Offer
+   the person a build badge in test builds (commit and server, in a
+   corner), so every screenshot says which build it is. Room devices get
+   their own AVD or simulator, named as a room's, and claim console ports
+   in `$ADMINISTRATION_DEVICE_PORTS` (5620-5680), passing over a port
+   anything else holds; the person's own dev tooling should stay out of
+   that range. A phone gets a `restart` hook that boots the same device
+   again and reinstalls, so one crash isn't a lost part. Equipment that points an app off this machine is refused
    unless it declares that server shared (`shared = ["<host>"]`, a test
    server, never production). When the plan has a **Shared server** part,
    ask the person straight out, naming the host: "Is <host> production?

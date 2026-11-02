@@ -751,6 +751,10 @@ type equipment struct {
 	About    string   `toml:"about"`
 	Setup    string   `toml:"setup"`
 	Teardown string   `toml:"teardown"`
+	// For server = "screen": run once when the device stops answering, to
+	// boot it again (on the same address) and reinstall the app, before it's
+	// called lost.
+	Restart string `toml:"restart"`
 	Server   string   `toml:"server"` // "playwright", "sandboxed", "commands", "screen", or a path in the project
 	Driver   string   `toml:"driver"` // for server = "screen": the project's program that drives the device
 	Keys     []string `toml:"keys"`   // for server = "screen": the keys its driver knows
@@ -842,7 +846,10 @@ func checkEquipment(project, name string) (*equipment, error) {
 	if _, err := eq.sharedHosts(); err != nil {
 		return nil, refusal{fmt.Sprintf("equipment %s: %v", name, err)}
 	}
-	for _, h := range []string{eq.Setup, eq.Teardown} {
+	if eq.Restart != "" && eq.Server != "screen" {
+		return nil, fmt.Errorf("equipment %s: restart is for a screen's device (server = \"screen\")", name)
+	}
+	for _, h := range []string{eq.Setup, eq.Teardown, eq.Restart} {
 		if h == "" {
 			continue
 		}

@@ -10,6 +10,7 @@ pass_env = ["ANDROID_HOME", "ANDROID_AVD_HOME", "ADMINISTRATION_AVD"]
 about = "An Android phone (an emulator, fresh for you) with the Notes app open in its browser. You see its screen and touch it: tap, swipe, type on its keyboard, and its Back and Home keys."
 setup = ".administration/equipment/phone/start"
 teardown = ".administration/equipment/phone/stop"
+restart = ".administration/equipment/phone/restart"
 server = "screen"
 driver = ".administration/equipment/phone/driver"
 args = ["{SERIAL}"]

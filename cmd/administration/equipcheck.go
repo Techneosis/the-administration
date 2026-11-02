@@ -68,6 +68,10 @@ func cmdEquipmentCheck(args []string) error {
 	c := &contract{ID: id, Target: "equipment check", Project: project, PlacedAt: time.Now().UTC(), PlacedBy: placedBy(),
 		Professionals: []castItem{{Name: name, Kind: "user", Source: "house", Uses: []string{eqName}, NoBrowser: !eq.NeedsApp}}}
 	ci := &c.Professionals[0]
+	// Held to the project's HEAD, as a contract placed now would be.
+	if err := recordCommit(c, ""); err != nil {
+		return err
+	}
 	if err := writeJSON(filepath.Join(dir, "contract.json"), c); err != nil {
 		return err
 	}
@@ -122,6 +126,17 @@ func cmdEquipmentCheck(args []string) error {
 	} else if err := makeRoom(c, ci, pd, &s, save); err != nil {
 		return err
 	}
+	if hook := buildHook(c); hook != "" {
+		fmt.Printf("Building %s with the house's build hook (or taking it from the books)...\n", short(buildCommit(c)))
+		if s.BuildArtifact, s.BuildCommit, err = ensureBuild(ctx, c, hook); err != nil {
+			if e := interrupted(); e != nil {
+				return e
+			}
+			fmt.Printf("The build didn't work: %v\n", err)
+			return startError{"equipment check failed"}
+		}
+		fmt.Printf("The build: %s\n", s.BuildArtifact)
+	}
 	fmt.Printf("Starting %s (up to %s)...\n", eqName, setupTimeout())
 	t0 := time.Now()
 	vars, err := startEquipment(ctx, c, ci, pd, tag, &s, save)
@@ -149,6 +164,12 @@ func cmdEquipmentCheck(args []string) error {
 		fmt.Printf(" Its setup printed: %s.", strings.Join(printed, ", "))
 	}
 	fmt.Println()
+	for _, b := range s.Builds {
+		fmt.Printf("Its build: %s.\n", b)
+		if b.Commit == "" {
+			fmt.Println("Have its setup print BUILD_COMMIT= (and BUILD_APP=, BUILD_VERSION=) for what it installed, so a contract can hold the build to its commit (docs/equipment.md, Which build).")
+		}
+	}
 	if eq.Server != "screen" {
 		fmt.Printf("It's a %q server, not a screen, so there's no picture to take; a small first contract through it proves the rest.\n", eq.Server)
 		if f.has("shot") {
@@ -176,6 +197,9 @@ func cmdEquipmentCheck(args []string) error {
 			return err
 		}
 		fmt.Printf("Its screen answered: %s Saved what a professional would see to %s.\n", n, out)
+		if c.Commit != "" {
+			fmt.Printf("If the app shows a build badge, the picture should read %s (docs/equipment.md, Which build).\n", short(c.want())[:7])
+		}
 	}
 	done = fmt.Sprintf("Cleared away. Users can work through %s.", eqName)
 	return nil

@@ -50,8 +50,9 @@ commands = ["bin/the-tool", "wc", "file"]
 
 [equipment.phone]
 about = "An Android phone, fresh for you, with the app open. Tap, swipe, type, Back and Home."
-setup = ".administration/equipment/phone/start"   # boots it, prints SERIAL=...
+setup = ".administration/equipment/phone/start"   # boots it, installs the build, prints SERIAL= and BUILD_COMMIT=...
 teardown = ".administration/equipment/phone/stop"
+restart = ".administration/equipment/phone/restart"  # once, before the device is called lost: boot it again, reinstall
 server = "screen"         # the house's screen, in front of the project's driver
 driver = ".administration/equipment/phone/driver"
 args = ["{SERIAL}"]
@@ -205,11 +206,88 @@ address off this machine shows up there in a minute, not as a contract's
 lost purse. Then a small first contract, one user with `--only` a short
 task, proves the rest.
 
+It also says which build the setup installed (below, Which build), and
+with a picture, what the app's badge should read.
+
 During a contract, a screen whose pictures fail three times in a row is
 lost: the professional is told it's the device, not the app, to stop, and
 to write what's left as unreached; the summary says "equipment lost at
 HH:MM", so the coverage reads as partial. `administration resume <id>
 <name>` places a new contract for them with only what they couldn't reach.
+
+Before that, a screen whose equipment declares `restart` is restarted
+once: the hook runs as the person with the setup's environment
+(`ADMINISTRATION_ROOM`, `ADMINISTRATION_PORT`, `ADMINISTRATION_BUILD`...),
+and has to bring the same device back (the same serial: kill the
+emulator on the room's console port and boot it again there) with the
+build installed and the app open. If the screen answers after it, the
+professional is told the device was restarted and where they were is
+gone, and carries on; the status says "equipment restarted at HH:MM". If
+the restart fails, or the device dies again, it's lost. Write the boot
+once and have both hooks use it, so a restart is the setup's boot.
+
+## Which build
+
+A contract is on a commit: the project's HEAD when it was placed, and
+the uncommitted work on top if there was some ("Tested build" in
+`status` and the summary). What a room installs has to be that build,
+and the house can only know it if the setup says so. A setup that
+installs an app prints what it installed:
+
+```sh
+echo "BUILD_COMMIT=$(git -C "$ADMINISTRATION_MAIN" rev-parse HEAD)"  # better: the commit stamped in the build itself
+echo "BUILD_APP=org.example.notes"
+echo "BUILD_VERSION=1.4.0"
+```
+
+A build from another commit is refused before anyone enters, with the
+commit it is: rebuild, or place the contract with `--build <sha>` to test
+that build on purpose. Read the commit from the build (a field your build
+stamps into the app, the artifact's own metadata), not from the checkout,
+or a stale artifact at a shared path passes as new. A screen whose setup
+says nothing is let in, shown as "build not reported".
+
+Better still, let the house build it: a `build` hook in the house builds
+a commit into a folder, once, in a clean checkout with the house's `env/`
+copied in (README, The build hook; docs/design.md). The setup then
+installs `$ADMINISTRATION_BUILD`, and the room's build is known.
+
+**Give test builds a badge.** A small banner in a corner, or a line in
+the app's settings, reading the commit and the server it talks to
+("UAT · a1b2c3d · api 10.0.2.2:8080"), so every screenshot says which
+build it is. A professional's picture, a person's screenshot from a dev
+device, and a verifier's reading can then be told apart at a glance;
+without one, a dev build of the default branch and a room's build of the
+change look the same. `equipment-check` names the commit the badge
+should read.
+
+## Room devices apart from yours
+
+Rooms and the person's own development devices on one machine must not be
+mistaken for each other, by people or by agents:
+
+- **Their own names.** Rooms boot their own AVD (or simulator) made for
+  rooms, never the one used for development: an agent driving "the
+  emulator" by AVD name once tapped into a room's phone. Name it so it
+  reads as a room's (`<app>-room`).
+- **Their own ports.** Rooms take emulator console ports from a range
+  kept for them, 5620 to 5680 (even ones; each emulator takes the odd port
+  above for adb). Equipment hooks get the range as
+  `ADMINISTRATION_DEVICE_PORTS` (`5620-5680`; set it in the environment
+  you place from to move it). A room's setup claims a port there and
+  passes over any port something else holds (its console or adb port
+  answers, or adb already lists `emulator-<port>`), never sharing one:
+  `examples/phone-demo` does. Keep development emulators at 5554 to 5618,
+  and have the project's own dev tooling (anything that boots emulators
+  for people or agents) refuse the rooms' range. A development emulator
+  once booted on a port in the rooms' range during a contract, and the
+  room's emulator on that port crashed twice.
+- **Only the build under test.** A room's setup uninstalls every app it
+  didn't install (on Android, the third-party packages, `pm list packages
+  -3`, other than the one under test) before installing the build: an
+  AVD's snapshot can carry an old app, and a person or professional who
+  opens it judges the wrong one. A read-only emulator forgets the
+  uninstall when it's killed, so it costs nothing.
 
 ## Codes and links that arrive elsewhere
 
@@ -247,7 +325,8 @@ controls that drive the thing under test and nothing more (no
   manager's own behaviour gets tested.
 - **Android** (`examples/phone-demo`). Setup boots an emulator of the
   person's own AVD for the room (`-read-only`, so several rooms share one
-  AVD, on a console port it claims), waits for the phone's network, opens
+  AVD, on a console port it claims in the rooms' range), uninstalls any
+  app it didn't put there, waits for the phone's network, opens
   the app, and prints `SERIAL=`; the screen drives it through adb. Shown
   (`--show-browsers`) drops `-no-window`. The Administration ships no SDK
   or image: `pass_env` hands the hooks `ANDROID_HOME`, `ANDROID_AVD_HOME`
@@ -272,6 +351,9 @@ controls that drive the thing under test and nothing more (no
 - Installing equipment: the project's setup does it, or the person.
 - Windows or macOS VMs as examples: a screen driver over VNC, or the
   wrapper shape, covers them, but nothing here has been tried on one.
+- Enforcing the rooms' port range on the person's side: the house can
+  give rooms their range and a setup can pass over a taken port, but only
+  the person's own tooling can keep out of it.
 - An emulator killed hard (not by its teardown) can leave its AVD locked,
   and the next boot waits on it; the teardown's `emu kill` avoids that.
 

@@ -591,6 +591,7 @@ func writeSummary(c *contract, dir string) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Contract %s: %s\n\n", c.ID, c.Target)
 	fmt.Fprintf(&b, "Placed %s by %s, in %s.\n\n", c.PlacedAt.Local().Format(time.DateTime), c.PlacedBy, c.Project)
+	b.WriteString(provenanceNote(c, dir))
 	fmt.Fprintf(&b, "| professional | kind | outcome | findings | unreached |\n|---|---|---|---|---|\n")
 	total, failed, failedF := 0, 0, 0
 	for _, p := range c.Professionals {
@@ -607,6 +608,9 @@ func writeSummary(c *contract, dir string) (string, error) {
 		}
 		if p := s.partial(); p != "" {
 			outcome += "; " + p + ": most of their part is untested"
+		}
+		if s.EquipmentRestarted != "" {
+			outcome += "; equipment restarted at " + s.EquipmentRestarted
 		}
 		if s.EquipmentLost != "" {
 			outcome += "; equipment lost at " + s.EquipmentLost + ", so part of their work wasn't done"

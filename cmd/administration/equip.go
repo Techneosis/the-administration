@@ -67,6 +67,10 @@ func startEquipment(ctx context.Context, c *contract, ci *castItem, pd, tag stri
 			return nil, err
 		}
 		v := map[string]string{"room": s.Room, "port": strconv.Itoa(eqPort(s))}
+		if s.BuildArtifact != "" {
+			v["build"] = s.BuildArtifact
+			v["build_commit"], _, _ = strings.Cut(s.BuildCommit, "-work-")
+		}
 		if eq.Server == "sandboxed" {
 			// Where its setup builds the tool.
 			if err := os.MkdirAll(filepath.Join(s.Room, "equipment", name), 0o700); err != nil {
@@ -83,7 +87,7 @@ func startEquipment(ctx context.Context, c *contract, ci *castItem, pd, tag stri
 			sctx, cancel := context.WithTimeout(ctx, setupTimeout())
 			cmd := exec.Command(hook)
 			cmd.Dir = c.Project
-			cmd.Env = equipmentEnv(c, ci, name, s, v, tag)
+			cmd.Env = append(equipmentEnv(c, ci, name, s, v, tag), buildEnv(s)...)
 			cmd.Stdout, cmd.Stderr = io.MultiWriter(&out, logf), logf
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			if err := cmd.Start(); err != nil {
@@ -122,9 +126,31 @@ func startEquipment(ctx context.Context, c *contract, ci *castItem, pd, tag stri
 				}
 			}
 		}
+		// What build the room runs: as its setup said, or the build hook's.
+		b := buildFromVars(name, v)
+		if b.Commit == "" && s.BuildCommit != "" && eq.Setup != "" {
+			b.From, b.Commit, b.withWork = name+" (build hook)", c.want(), true
+		}
+		if b.Commit != "" || b.App != "" || eq.Server == "screen" || eq.Server == "playwright" {
+			b, err = checkBuild(c, b)
+			addBuild(s, b)
+			save()
+			if err != nil {
+				return nil, err
+			}
+		}
 		vars[name] = v
 	}
 	return vars, nil
+}
+
+// buildEnv is what a room's hooks hear of the build hook's build.
+func buildEnv(s *status) []string {
+	if s.BuildArtifact == "" {
+		return nil
+	}
+	commit, _, _ := strings.Cut(s.BuildCommit, "-work-")
+	return []string{"ADMINISTRATION_BUILD=" + s.BuildArtifact, "ADMINISTRATION_BUILD_COMMIT=" + commit}
 }
 
 // equipmentGround holds what an equipment's setup prints to Rule 1, as a
@@ -260,6 +286,10 @@ func equipmentEnv(c *contract, ci *castItem, name string, s *status, v map[strin
 		// Where a sandboxed equipment's setup puts the build its commands run.
 		"ADMINISTRATION_EQUIPMENT_DIR="+filepath.Join(s.Room, "equipment", name),
 		"ADMINISTRATION_PORT="+v["port"],
+		// The emulator console ports kept for rooms (docs/equipment.md,
+		// Room devices apart from yours): a device's setup claims one
+		// here, and the person's own development devices stay out of it.
+		"ADMINISTRATION_DEVICE_PORTS="+devicePorts(),
 	)
 	if c.ShowBrowsers {
 		env = append(append(env, "ADMINISTRATION_SHOW=1"), displayEnv()...)
@@ -388,6 +418,20 @@ func equipmentServers(c *contract, ci *castItem, room string, vars eqVars, node 
 			// Where it says the device is lost, for the worker to record.
 			env["ADMINISTRATION_EQUIPMENT_LOST"] = filepath.Join(room, "equipment-lost")
 			env["ADMINISTRATION_HOUSE"] = contractHouse(c)
+			if eq.Restart != "" {
+				// The restart hook hears what the setup did, so it can boot
+				// the same device again and put the same build back on it.
+				hook, _ := projectProgram(c.Project, eq.Restart)
+				env["ADMINISTRATION_EQUIPMENT_RESTART"] = hook
+				for k, v := range map[string]string{"ADMINISTRATION_CONTRACT": c.ID, "ADMINISTRATION_PROFESSIONAL": ci.Name,
+					"ADMINISTRATION_MAIN": c.Project, "ADMINISTRATION_ROOM": room, "ADMINISTRATION_EQUIPMENT": name,
+					"ADMINISTRATION_EQUIPMENT_DIR": filepath.Join(room, "equipment", name), "ADMINISTRATION_PORT": vars[name]["port"],
+					"ADMINISTRATION_BUILD": vars[name]["build"], "ADMINISTRATION_BUILD_COMMIT": vars[name]["build_commit"]} {
+					if v != "" {
+						env[k] = v
+					}
+				}
+			}
 			servers[key] = map[string]any{"command": self, "args": dargs, "env": env}
 			tools = driveToolNames()
 		case "commands":
@@ -537,4 +581,14 @@ func runDeclared(prog string, args []string, desk string) (string, bool) {
 		o = o[:equipOutputCap] + "\n… (cut)"
 	}
 	return fmt.Sprintf("exit %d\n%s", code, o), code != 0
+}
+
+// devicePorts is the range of emulator console ports kept for rooms, as
+// FIRST-LAST: 5620-5680 (even ones; each emulator also takes the odd one
+// above it for adb), or ADMINISTRATION_DEVICE_PORTS.
+func devicePorts() string {
+	if v := os.Getenv("ADMINISTRATION_DEVICE_PORTS"); regexp.MustCompile(`^\d{4,5}-\d{4,5}$`).MatchString(v) {
+		return v
+	}
+	return "5620-5680"
 }

@@ -10,11 +10,13 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -95,6 +97,11 @@ type drive struct {
 	lost     string
 	lostFile string
 	stderr   string // the driver's last stderr, for a picture that isn't one
+	// The equipment's restart hook, run once before the device is called
+	// lost (a crashed emulator boots again and the app goes back on), and
+	// whether it has been.
+	restart   string
+	restarted bool
 }
 
 // lostAfter is how many failed screenshots in a row mean the device is gone:
@@ -109,7 +116,8 @@ func cmdDrive(args []string) error {
 	if len(args) < 1 {
 		return usageError{"_drive DRIVER [ARGS...] [-- KEY...]"}
 	}
-	d := &drive{prog: args[0], scale: 1, lostFile: os.Getenv("ADMINISTRATION_EQUIPMENT_LOST")}
+	d := &drive{prog: args[0], scale: 1, lostFile: os.Getenv("ADMINISTRATION_EQUIPMENT_LOST"),
+		restart: os.Getenv("ADMINISTRATION_EQUIPMENT_RESTART")}
 	rest := args[1:]
 	for i, a := range rest {
 		if a == "--" {
@@ -182,11 +190,68 @@ func (d *drive) guarded(name string, a map[string]any) map[string]any {
 			why, _ = m["text"].(string)
 		}
 	}
+	// Once, a restart: an emulator that crashed mid-contract came back fine
+	// when booted again, and each loss had cost a part.
+	if d.restart != "" && !d.restarted {
+		d.restarted = true
+		if err := d.restartDevice(); err == nil {
+			d.fails = 0
+			if d.lostFile != "" {
+				_ = os.WriteFile(d.lostFile+"-restarted", []byte(time.Now().Format("15:04")+" "+oneLine(why, 300)+"\n"), 0o600)
+			}
+			return textResult(fmt.Sprintf("The equipment failed %d times in a row (last: %s) and has been restarted: the device booted again and the app was installed fresh, so where you were and anything you had entered there is gone. Look at the screen, get back to where you were in your plan, and carry on; say in your report that it was restarted, and when.", lostAfter, oneLine(why, 300)), true)
+		} else {
+			why = oneLine(why, 200) + "; restarting it failed too: " + oneLine(err.Error(), 200)
+		}
+	}
 	d.lost = fmt.Sprintf("The equipment has failed %d times in a row (last: %s). It's lost: the device, not the app. Stop using it now: write UNREACHED: for each thing left in your plan, saying the equipment was lost, and then your report.", d.fails, oneLine(why, 300))
 	if d.lostFile != "" {
 		_ = os.WriteFile(d.lostFile, []byte(time.Now().Format("15:04")+" "+oneLine(why, 300)+"\n"), 0o600)
 	}
 	return textResult(d.lost, true)
+}
+
+// restartDevice runs the equipment's restart hook, as the person, with the
+// room's environment, and checks the screen answers after it.
+func (d *drive) restartDevice() error {
+	ctx, cancel := context.WithTimeout(context.Background(), restartTimeout())
+	defer cancel()
+	cmd := exec.Command(d.restart)
+	// What it boots belongs to the room, as the setup's did: cleared at
+	// teardown, not when the professional's session ends.
+	if t, ok := strings.CutSuffix(os.Getenv(tagVar), "/pro"); ok {
+		cmd.Env = tagEnv(os.Environ(), t+"/setup")
+	}
+	var e bytes.Buffer
+	cmd.Stdout, cmd.Stderr = io.Discard, &e
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := waitGroup(ctx, cmd); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("it took longer than %s", restartTimeout())
+		}
+		if msg := oneLine(e.String(), 300); msg != "" {
+			return fmt.Errorf("%v: %s", err, msg)
+		}
+		return err
+	}
+	b, err := d.run("screenshot")
+	if err != nil {
+		return fmt.Errorf("the screen still doesn't answer: %v", err)
+	}
+	if _, err := png.Decode(bytes.NewReader(b)); err != nil {
+		return fmt.Errorf("the screen still doesn't give a picture")
+	}
+	return nil
+}
+
+func restartTimeout() time.Duration {
+	if t, err := time.ParseDuration(os.Getenv("ADMINISTRATION_RESTART_TIMEOUT")); err == nil && t > 0 {
+		return t
+	}
+	return 10 * time.Minute
 }
 
 func cloneTool(t map[string]any, desc string) map[string]any {

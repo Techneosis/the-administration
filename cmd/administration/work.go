@@ -37,6 +37,9 @@ type manifest struct {
 	Origins []string        `json:"origins"`
 	Data    string          `json:"data"`
 	Roles   map[string]role `json:"roles"`
+	// The commit the app was built from, when the setup knows better than
+	// the checkout's HEAD (provenance.go).
+	Build string `json:"build,omitempty"`
 }
 
 // A role's test login: a username or an email, and its local password.
@@ -95,6 +98,19 @@ func work(id, name string) error {
 	var m *manifest
 	var vars eqVars
 	var before *manifest
+	// The house's build hook builds what the room installs, once per
+	// commit (build.go); every room of the contract gets the same build.
+	if hook := buildHook(c); hook != "" && (ci.Kind == "user" || len(ci.Uses) > 0) {
+		if s.BuildArtifact, s.BuildCommit, err = ensureBuild(ctx, c, hook); err != nil {
+			if ctx.Err() != nil {
+				finish("closed", "closed while the build was being made")
+			} else {
+				finish("failed", err.Error())
+			}
+			return nil
+		}
+		save()
+	}
 	if ci.Kind == "critic" && len(ci.Uses) > 0 {
 		// Its equipment needs a room: no app in it, the hooks start what the
 		// commands run on.
@@ -150,6 +166,10 @@ func work(id, name string) error {
 	if s.Room != "" {
 		if b, err := os.ReadFile(filepath.Join(s.Room, "equipment-lost")); err == nil {
 			s.EquipmentLost = strings.TrimSpace(string(b))
+			save()
+		}
+		if b, err := os.ReadFile(filepath.Join(s.Room, "equipment-lost-restarted")); err == nil {
+			s.EquipmentRestarted = strings.TrimSpace(string(b))
 			save()
 		}
 	}
@@ -323,9 +343,15 @@ func buildRoom(ctx context.Context, c *contract, ci *castItem, pd string, s *sta
 	defer logf.Close()
 	sctx, cancel := context.WithTimeout(ctx, setupTimeout())
 	defer cancel()
+	// What the setup builds from: the checkout as it is now, which may have
+	// moved on since the contract was placed.
+	head := ""
+	if c.Commit != "" {
+		head, _ = git(c.Project, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	}
 	cmd := exec.Command(filepath.Join(contractHouse(c), "setup"), c.Project, app)
 	cmd.Dir = c.Project
-	cmd.Env = roomEnv(c, ci.Name, app, ports, mf, readTag(filepath.Dir(pd), ci.Name))
+	cmd.Env = append(roomEnv(c, ci.Name, app, ports, mf, readTag(filepath.Dir(pd), ci.Name)), buildEnv(s)...)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -354,6 +380,39 @@ func buildRoom(ctx context.Context, c *contract, ci *castItem, pd string, s *sta
 		return nil, fmt.Errorf("the room's manifest: %v", err)
 	}
 	if err := checkManifest(&m, ps, ci.SignsInAs); err != nil {
+		return nil, err
+	}
+	// A checkout that moved while the setup ran is as far off as one that
+	// moved before it.
+	if after, _ := git(c.Project, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); head == c.Commit && after != "" {
+		head = after
+	}
+	rb := roomBuild{From: "app", Commit: m.Build}
+	switch {
+	case rb.Commit == "" && s.BuildCommit != "":
+		rb.From, rb.Commit, rb.withWork = "app (build hook)", c.want(), true
+	case rb.Commit == "" && head == c.Commit && c.Build == "":
+		rb.Commit = c.Commit
+		// Built from the checkout, uncommitted work and all: the work placed,
+		// unless it has changed since.
+		if now, _ := workHash(c.Project); now == c.Work {
+			rb.withWork = true
+		} else {
+			rb.Note = fmt.Sprintf("the uncommitted work changed after the contract was placed (%s, then %s)", orNone(c.Work), orNone(now))
+		}
+	case rb.Commit == "":
+		rb.Commit = head
+	}
+	rb, err = checkBuild(c, rb)
+	if c.Commit != "" {
+		addBuild(s, rb)
+		save()
+	}
+	if err != nil {
+		if head != c.Commit && m.Build == "" {
+			return nil, refusal{fmt.Sprintf("the project has moved on since the contract was placed (HEAD is %s, the contract is on %s), and the setup builds the room from the checkout: place the contract again to test %s, or put the checkout back at %s",
+				short(head), short(c.Commit), short(head), short(c.Commit))}
+		}
 		return nil, err
 	}
 	s.URL = m.URL
@@ -1102,6 +1161,12 @@ func runProfessional(ctx context.Context, c *contract, ci *castItem, pd, tag str
 			"--allowedTools", strings.Join(allowed, ","), "--disallowedTools", strings.Join(denied, ","))
 		cwd, tmp = filepath.Join(s.Room, "desk"), filepath.Join(s.Room, "tmp")
 	} else {
+		// The project as it was when the contract was placed, not the
+		// checkout someone may still be committing to.
+		var why string
+		if cwd, why = projectCopy(c, filepath.Dir(pd)); why != "" {
+			fmt.Fprintf(os.Stderr, "administration: %s\n", why)
+		}
 		args = append(args, "--tools", "Read,Grep,Glob")
 		if c.Changes != nil {
 			args = append(args, "--add-dir", filepath.Dir(c.Changes.Patch))

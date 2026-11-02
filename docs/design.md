@@ -47,7 +47,8 @@ changes" into CLI calls, and checks findings against the code afterwards.
   output, the persona as an appended system prompt, and a generated settings
   file. Users: no built-in tools, Playwright only (an allowlist of its
   tools), working directory = the room. Critics: `Read,Grep,Glob`, working
-  directory = the project, the diff handed in with `--add-dir`: whole, and
+  directory = the contract's copy of the project as it was placed (The
+  build under test), the diff handed in with `--add-dir`: whole, and
   split by file with an index (`changes/INDEX.md`, each file's lines added
   and removed), since every turn re-reads all that came before it and the
   whole diff read once was the largest single thing critics re-read. The
@@ -205,7 +206,8 @@ changes" into CLI calls, and checks findings against the code afterwards.
 - **Verify** (`verify.go`): after close, the summary's unchecked findings
   go in batches (12 by default) to verifiers, four at once. A verifier is
   `claude -p` walled as the Director is: `Read`, `Grep` and `Glob` only,
-  the project and the contract's patch added, a deny list for the shell,
+  the contract's copy of the project (below, The build under test) and
+  its patch added, a deny list for the shell,
   the web, writing and secrets. Its prompt (`house/verifier.prompt`) has it
   trace each finding in the code and answer confirmed, likely or false with
   the line that decided it. The verdicts go into each professional's
@@ -269,6 +271,67 @@ changes" into CLI calls, and checks findings against the code afterwards.
 - **Workers**: started directly by `place`, each in a session of its own,
   so they outlive the shell or tool call that placed the contract. The
   worker resets PATH to the placer's.
+- **The build under test** (`provenance.go`): `place` records the
+  project's HEAD (`commit`) and, when the work isn't all committed, a hash
+  of the uncommitted files (`work`), and prints both as "Tested build" in
+  `status` and the summary. It copies the project as it is then into the
+  contract (`.checkout`: a `--shared` clone checked out at HEAD, its `.git`
+  removed, the uncommitted files copied on top, never a secret), and
+  critics work in that copy and verifiers read it, so a builder who keeps
+  committing moves nothing under them, and NEW and OLD are judged against
+  the patch and the code as they were tested. A contract from before
+  this, or whose copy was pruned, gets one when verify runs (without the
+  uncommitted work if that has changed since, and it says so). Every room
+  records its build (`builds` in the status): what equipment's setup
+  says it installed (`BUILD_COMMIT=`, with `BUILD_APP=` and
+  `BUILD_VERSION=`), the build hook's (below), or, for a web room, the
+  checkout's HEAD while its setup ran, unless the manifest says otherwise
+  (`"build"`). A build from another commit is refused, with the commit it
+  is and how to test it on purpose: `place --build SHA`, which makes that
+  commit the one every room is held to. A build that names no commit is
+  let in and shown as "build not reported" (only for equipment with a
+  screen, since that's where an app is), and one of HEAD that may lack
+  the uncommitted work is let in with that said. Git is only read: the
+  uncommitted work is never committed or stashed, only hashed and
+  copied, and the copy is a clone in the books.
+- **Base sanity** (`baseWarnings`): `place --changes` warns, and the
+  summary keeps it, when the branch is missing commits the local default
+  branch has (they won't be in what's tested), or when the local default
+  branch is ahead of the remote one the changes are compared with
+  ("local main is 3 commits ahead of origin/main: test on top of local
+  main? (--base main)"). It warns rather than refuses: a branch behind
+  main can be the point.
+- **The build hook** (`build.go`): an optional `build` in the house. A
+  phone app built by hand to one shared path, from whichever checkout,
+  without the untracked config that checkout lacked, is the opposite of
+  provenance; so a house can let the Administration build. `build COMMIT
+  OUT` runs once per commit (with uncommitted work, per commit and work
+  hash), as the person, outside every wall like setup, in a clean
+  checkout made the same way as the contract's copy, with the house's
+  `env/` folder copied in first at the same paths (a `.env`,
+  `local.properties`: what nobody commits). It puts its build in `OUT`
+  and prints its path last (or nothing: `OUT` is the build); the checkout
+  goes once it's done, so a build left there is refused. Builds are kept
+  in the books under `builds/<project>/<commit>/` with their log; rooms
+  that ask at once wait on one lock and the first builds; the next
+  contract on the same commit takes it as it is. Equipment's setup, and
+  the web setup, get `ADMINISTRATION_BUILD` (the path) and
+  `ADMINISTRATION_BUILD_COMMIT`, and the room's build is recorded as the
+  hook's, so it can't be the wrong one. A failed build fails the room with
+  its log's path. `administration build [REF]` runs it by hand (to try a
+  hook, or build ahead); `prune` removes builds unused for its age. The
+  hook builds commits, not working trees, because a cache keyed by
+  anything less exact is a shared path again.
+- **Equipment restart**: a screen's equipment can declare `restart`, run
+  once by the screen's server when the device would otherwise be called
+  lost (an emulator that crashed came back when booted again, each loss
+  having cost a part). It runs as the person with the room's environment
+  and the setup's tag, so what it boots is cleared with the room; it must
+  bring the device back where the setup put it (the same serial), since
+  the driver's arguments don't change. If the screen answers after it,
+  the professional is told what happened and carries on, and the status
+  says "equipment restarted at HH:MM"; if it fails, or the device dies
+  again, it's lost as before.
 - **No clock**: the Administration schedules nothing. A contract at a time
   or on a repeat is the person's scheduler running `place`, `wait` and
   `close`, which all work from a script with nobody at the screen; the
@@ -367,6 +430,9 @@ which are time. Anyone who wants to track usage can read them from
 | `ADMINISTRATION_CLAUDE` | `claude` | the claude binary |
 | `ADMINISTRATION_MAX_ROOMS` | 4 | browser rooms at once |
 | `ADMINISTRATION_SETUP_TIMEOUT` | 15m | the setup hook's limit |
+| `ADMINISTRATION_BUILD_TIMEOUT` | 1h | the build hook's limit |
+| `ADMINISTRATION_RESTART_TIMEOUT` | 10m | an equipment's restart hook's limit |
+| `ADMINISTRATION_DEVICE_PORTS` | 5620-5680 | the emulator console ports kept for rooms, handed to equipment hooks |
 | `ADMINISTRATION_TOOLS` | `~/.local/share/administration/tools` | the pinned Playwright MCP, from `install.sh` |
 | `ADMINISTRATION_CONFIG` | `~/.config/administration` | the machine's own professionals and hooks |
 | `ADMINISTRATION_PROJECTS` | `$ADMINISTRATION_CONFIG/projects` | houses kept on the machine, at `<host>/<owner>/<repo>` of each project's origin |

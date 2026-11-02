@@ -328,3 +328,67 @@ func hireFile(project, src string, replace bool) (*professional, string, error) 
 	return p, dst, nil
 }
 
+
+// baseWarnings says when the changes' base isn't what the person likely
+// thinks it is: the branch is missing commits that are on the local default
+// branch (so it's tested without work already done there), or the local
+// default branch is ahead of the remote one the changes are compared with.
+// A branch cut from the remote's main while local main had unpushed fixes
+// was once tested without them, and a bug main had fixed came back as a
+// finding.
+func baseWarnings(project, base string) []string {
+	local, remote := "", ""
+	remotes, _ := git(project, "remote")
+	for _, r := range lines(remotes) {
+		if rest, ok := strings.CutPrefix(base, r+"/"); ok {
+			remote = base
+			if rest == "HEAD" {
+				// origin/HEAD is a name for the remote's default branch.
+				if sym, err := git(project, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+base); err == nil && sym != "" {
+					remote = sym
+					rest = strings.TrimPrefix(sym, r+"/")
+				}
+			}
+			local = rest
+			break
+		}
+	}
+	if remote == "" {
+		local = strings.TrimPrefix(base, "refs/heads/")
+		if up, err := git(project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", local+"@{upstream}"); err == nil && up != "" {
+			remote = up
+		}
+	}
+	if local == "" {
+		return nil
+	}
+	if _, err := git(project, "rev-parse", "--verify", "--quiet", "refs/heads/"+local); err != nil {
+		return nil
+	}
+	count := func(rng string) int {
+		out, err := git(project, "rev-list", "--count", rng)
+		if err != nil {
+			return 0
+		}
+		n, _ := strconv.Atoi(out)
+		return n
+	}
+	var out []string
+	if n := count("HEAD.." + "refs/heads/" + local); n > 0 {
+		w := fmt.Sprintf("this branch is missing %s that %s has: they won't be in what's tested, and a bug %s already fixed can come back as a finding. Rebase onto %s first, or place it anyway knowing that.",
+			plural(n, "commit", "commits"), local, local, local)
+		out = append(out, w)
+	}
+	if remote != "" && remote != local {
+		if n := count(remote + "..refs/heads/" + local); n > 0 {
+			w := fmt.Sprintf("local %s is %s ahead of %s", local, plural(n, "commit", "commits"), remote)
+			if base == remote || strings.HasSuffix(base, "/HEAD") {
+				w += fmt.Sprintf(", which the changes are compared with: test on top of local %s? (--base %s)", local, local)
+			} else {
+				w += ": not pushed yet"
+			}
+			out = append(out, w)
+		}
+	}
+	return out
+}

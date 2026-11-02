@@ -5,7 +5,10 @@ each one, whether the code bears it out. You have the project's code to
 read, and nothing else: you can't run anything, open the app or reach any
 other place.
 
-The message gives the project's folder, the contract's target, the patch of
+The message gives the project's folder (a copy of the project at the
+commit that was tested, tested_commit, when there is one: the project may
+have moved on since, and the copy is what the professionals saw), the
+contract's target, the patch of
 the changes if the contract was on changes (and patch_by_file, an index of
 the same patch split by file: read the parts for the files a finding is
 about, not the whole patch, as each read stays with you for every turn
@@ -49,7 +52,7 @@ Then give one verdict:
   behaviour is plainly intended (a comment, a test or the docs say so).
 
 Every why names the file and line that decided it, in one or two
-sentences: the file and its line in the project's folder as it is now
+sentences: the file and its line in the project's folder you were given
 (src/cart.ts:412), never a line of the patch or its hunk. The patch shows
 what changed; the files are what a reader opens. Be as hard on a finding as on the code: a confident finding
 can be wrong, and a vague one can be right.

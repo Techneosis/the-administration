@@ -198,8 +198,21 @@ func verifyBatch(c *contract, rd string, batch []*summed, model string, coins ti
 		}
 		items = append(items, it)
 	}
-	in := map[string]any{"project": c.Project, "target": c.Target, "findings": items}
-	addDirs := []string{"--add-dir", c.Project}
+	// The project as it was tested, not as it is now: findings true of the
+	// tested commit were once checked false against a branch that had
+	// moved on.
+	code, why := projectCopy(c, filepath.Dir(filepath.Dir(rd)))
+	if why != "" {
+		fmt.Fprintf(os.Stderr, "administration: %s\n", why)
+	}
+	in := map[string]any{"project": code, "target": c.Target, "findings": items}
+	if t := c.tested(); t != "" && code != c.Project {
+		in["tested_commit"] = t
+		if c.Work != "" {
+			in["tested_commit"] = t + ", with the uncommitted work as it was then"
+		}
+	}
+	addDirs := []string{"--add-dir", code}
 	if c.Changes != nil && c.Changes.Patch != "" {
 		in["patch"] = c.Changes.Patch
 		if c.Changes.Split != "" {

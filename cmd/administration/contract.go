@@ -53,6 +53,17 @@ type contract struct {
 	NotKept []string `json:"not_kept,omitempty"`
 	// A resume's "ID NAME": the professional and contract it picks up from.
 	Resumes string `json:"resumes,omitempty"`
+	// The build under test (provenance.go): HEAD when it was placed, a
+	// hash of the uncommitted work on top when there was some, the commit
+	// the person chose with --build, and the copy of the project as it was
+	// placed that critics and verifiers read.
+	Commit   string `json:"commit,omitempty"`
+	Work     string `json:"work,omitempty"`
+	Build    string `json:"build,omitempty"`
+	Checkout string `json:"checkout,omitempty"`
+	// What place warned about the changes' base (a branch missing the
+	// local default branch's commits), kept for whoever triages later.
+	BaseWarnings []string `json:"base_warnings,omitempty"`
 }
 
 type castItem struct {
@@ -116,6 +127,13 @@ type status struct {
 	// Shared non-production servers its equipment's app talked to
 	// ("phone: staging.example.com"): what it saw may be the server's.
 	Shared []string `json:"shared,omitempty"`
+	// The builds its room ran, as each said (provenance.go), and the build
+	// hook's, when the house has one (build.go).
+	Builds        []roomBuild `json:"builds,omitempty"`
+	BuildArtifact string      `json:"build_artifact,omitempty"`
+	BuildCommit   string      `json:"build_commit,omitempty"`
+	// When its equipment was restarted after it stopped answering.
+	EquipmentRestarted string `json:"equipment_restarted,omitempty"`
 }
 
 // partial says when someone came back with most of their plan undone: back,
@@ -348,7 +366,7 @@ func cmdPlace(args []string) error {
 // from one never placed, and let go of a lock it needed only until then.
 func placeContract(args []string, resumes string, placed func(id string)) error {
 	f, err := parseFlags(args, map[string]bool{"cast": true, "with": true, "coins": true, "model": true, "project": true, "dry-run": false,
-		"changes": false, "base": true, "show-browsers": false, "no-watch": false, "no-before": false, "data": true, "brief": true, "only": true, "persona-from": true})
+		"changes": false, "base": true, "show-browsers": false, "no-watch": false, "no-before": false, "data": true, "brief": true, "only": true, "persona-from": true, "build": true})
 	if err != nil {
 		return err
 	}
@@ -577,11 +595,18 @@ func placeContract(args []string, resumes string, placed func(id string)) error 
 	if f.has("base") && !f.has("changes") {
 		return usageError{"--base goes with --changes"}
 	}
+	if err := recordCommit(c, strings.TrimSpace(f.get("build"))); err != nil {
+		return err
+	}
 	dir := filepath.Join(books, "contracts", id)
 	if f.has("changes") {
 		if c.Changes, err = collectChanges(project, f.get("base"), filepath.Join(dir, contractHandout)); err != nil {
 			os.RemoveAll(dir)
 			return err
+		}
+		c.BaseWarnings = baseWarnings(project, c.Changes.Base)
+		for _, w := range c.BaseWarnings {
+			fmt.Fprintln(os.Stderr, "administration: "+w)
 		}
 		// A release check: users compare the app before and after.
 		c.Before = webUsers > 0 && !f.has("no-before") && c.Changes.MergeBase != ""
@@ -634,6 +659,16 @@ func placeContract(args []string, resumes string, placed func(id string)) error 
 				_ = os.WriteFile(filepath.Join(pd, "hire.md"), b, 0o600)
 			}
 		}
+	}
+	// Critics read the project as it was when the contract was placed, and
+	// so do the verifiers after: a copy at the tested commit.
+	if sha := c.tested(); sha != "" {
+		p, err := makeCheckout(project, sha, c.Work, checkoutDir(dir))
+		if err != nil {
+			os.RemoveAll(dir)
+			return err
+		}
+		c.Checkout = p
 	}
 	if err := writeJSON(filepath.Join(dir, "contract.json"), c); err != nil {
 		return err
@@ -866,9 +901,15 @@ func cmdStatus(args []string) error {
 			state = "closed"
 		}
 		fmt.Printf("Contract %s (%s), on %q, placed %s\n", vw.ID, state, vw.Target, vw.PlacedAt.Local().Format("Mon 15:04"))
+		if t := vw.testedLine(); t != "" {
+			fmt.Println("  " + t)
+		}
 		for _, p := range vw.Professionals {
 			s := vw.Status[p.Name]
 			fmt.Printf("  %-26s %-8s %s\n", p.Name, s.State, describe(s))
+			for _, b := range s.Builds {
+				fmt.Printf("  %-26s %-8s build %s\n", "", "", b)
+			}
 		}
 	}
 	if len(f.pos) == 0 {
@@ -896,6 +937,9 @@ func describe(s status) string {
 	}
 	if s.Reason != "" {
 		parts = append(parts, s.Reason)
+	}
+	if s.EquipmentRestarted != "" {
+		parts = append(parts, "equipment restarted at "+s.EquipmentRestarted)
 	}
 	if s.EquipmentLost != "" {
 		parts = append(parts, "equipment lost at "+s.EquipmentLost+"; the rest of their part wasn't done")

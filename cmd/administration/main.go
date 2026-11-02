@@ -36,9 +36,13 @@ const usage = `administration: contracts for persona agents.
   administration place TARGET... --cast a,b | --with RUN [--coins 10m] [--model M]
                        [--changes [--base REF]] [--brief NAME=TASK]... [--only NAME=TASK]...
                        [--project DIR] [--dry-run] [--show-browsers] [--no-watch] [--no-before] [--data NAME]
+                       [--build SHA]
       place a contract; prints its id. --changes puts it on the branch's
       changes, and gives users the app before them too, to compare
-      (--no-before doesn't). In Herdr or tmux it opens a watch pane per
+      (--no-before doesn't), and warns when the branch is missing commits
+      the local default branch has. The contract is on the project's HEAD
+      (and any uncommitted work): a room whose build is from another
+      commit is refused, unless --build names that commit on purpose. In Herdr or tmux it opens a watch pane per
       professional, unfocused, in your space, each closing when they're
       back; a watch hook opens them instead (--no-watch, or
       ADMINISTRATION_WATCH=off, doesn't); --show-browsers opens users'
@@ -73,6 +77,10 @@ const usage = `administration: contracts for persona agents.
   administration room-check [--project DIR] [--data NAME] [--changes [--base REF]]
       build one room with the project's setup hook, check it comes up on
       seed data, show its address and logins, and clear it away
+  administration build [REF] [--project DIR]
+      the house's build hook's build of REF (HEAD, with any uncommitted
+      work): from the books, or built now in a clean checkout; prints its
+      path. Rooms install the same build, once per commit
   administration equipment-check NAME [--project DIR] [--shot FILE]
       start one piece of the project's equipment in a fresh room, say what
       its setup printed, take one picture through a screen (saved to FILE,
@@ -182,6 +190,8 @@ func run(args []string) int {
 		err = cmdWatch(args[1:])
 	case "room-check":
 		err = cmdRoomCheck(args[1:])
+	case "build":
+		err = cmdBuild(args[1:])
 	case "equipment-check":
 		err = cmdEquipmentCheck(args[1:])
 	case "resume":
