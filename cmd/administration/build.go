@@ -123,8 +123,21 @@ func builtAlready(dir string) (string, bool) {
 // ctx lets it.
 func lockWaiting(ctx context.Context, path string) (func(), error) {
 	for {
-		if unlock, ok := tryLockFile(path); ok {
-			return unlock, nil
+		// Prune may have removed the build's folder, lock and all, while
+		// this waited: start it anew, and hold a lock only on the file
+		// that's at path now, not on one removed under it.
+		_ = os.MkdirAll(filepath.Dir(path), 0o700)
+		if f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600); err == nil {
+			if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+				held, err1 := f.Stat()
+				now, err2 := os.Stat(path)
+				if err1 == nil && err2 == nil && os.SameFile(held, now) {
+					return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+				}
+				f.Close()
+				continue
+			}
+			f.Close()
 		}
 		select {
 		case <-ctx.Done():

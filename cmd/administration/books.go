@@ -614,6 +614,10 @@ func cmdPrune(args []string) error {
 					_ = os.RemoveAll(filepath.Join(dir, ".verify")) // a failed verifier's or matcher's stream
 					_ = os.RemoveAll(filepath.Join(dir, ".match"))
 					_ = os.RemoveAll(checkoutDir(dir)) // the copy critics and verifiers read
+					tmps, _ := filepath.Glob(checkoutDir(dir) + "-*") // a copy cut off before it was renamed into place
+					for _, t := range tmps {
+						_ = os.RemoveAll(t)
+					}
 					_ = os.RemoveAll(filepath.Join(dir, "handout")) // where it was before 0.4
 					stripped++
 				}
@@ -639,19 +643,22 @@ func cmdPrune(args []string) error {
 		if err != nil || time.Since(st.ModTime()) <= older {
 			continue
 		}
-		if unlock, ok := tryLockFile(filepath.Join(d, ".lock")); !ok {
+		unlock, ok := tryLockFile(filepath.Join(d, ".lock"))
+		if !ok {
 			continue // building now
-		} else {
-			unlock()
 		}
 		if f.has("dry-run") {
+			unlock()
 			fmt.Printf("would remove the build in %s\n", d)
 			continue
 		}
+		// Held until it's gone, so a build can't start in it meanwhile
+		// (one waiting for the lock finds the folder gone and starts anew).
 		_ = os.RemoveAll(filepath.Join(d, "src"))
 		if os.RemoveAll(d) == nil {
 			builds++
 		}
+		unlock()
 	}
 	if !f.has("dry-run") {
 		fmt.Printf("Pruned: %d contracts down to their summaries, %d removed (their numbers are in the ledger).\n", stripped, removed)

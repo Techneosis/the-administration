@@ -288,7 +288,7 @@ func makeCheckout(project, sha, work, dest string) (string, error) {
 	}
 	// Made beside dest and renamed into place whole, so two at once can't
 	// meet in one folder, and a failure removes only its own.
-	tmp, err := os.MkdirTemp(filepath.Dir(dest), "."+filepath.Base(dest)+"-")
+	tmp, err := os.MkdirTemp(filepath.Dir(dest), "."+strings.TrimPrefix(filepath.Base(dest), ".")+"-")
 	if err != nil {
 		return "", err
 	}
@@ -356,12 +356,15 @@ func projectCopy(c *contract, dir string) (path, why string) {
 // contract also has uncommitted work is let in with a note: the work under
 // review may not all be in it.
 func checkBuild(c *contract, b roomBuild) (roomBuild, error) {
-	got := strings.ToLower(strings.TrimSpace(b.Commit))
+	got := strings.TrimSpace(b.Commit)
 	dirty := false
 	for _, suf := range []string{"-dirty", "+dirty", "-modified"} {
-		if strings.HasSuffix(got, suf) {
-			got, dirty = strings.TrimSuffix(got, suf), true
+		if strings.HasSuffix(strings.ToLower(got), suf) {
+			got, dirty = got[:len(got)-len(suf)], true
 		}
+	}
+	if hexRE.MatchString(strings.ToLower(got)) {
+		got = strings.ToLower(got)
 	}
 	b.Commit = got
 	want := c.want()
@@ -379,12 +382,14 @@ func checkBuild(c *contract, b roomBuild) (roomBuild, error) {
 		if r, err := git(c.Project, "rev-parse", "--verify", "--quiet", got+"^{commit}"); err == nil && r != "" {
 			full = r
 		}
-	} else if r, err := git(c.Project, "rev-parse", "--verify", "--quiet", got+"^{commit}"); err == nil && r != "" {
-		full = r // a tag or branch name this checkout knows
+	} else if r, err := git(c.Project, "rev-parse", "--verify", "--quiet", "refs/tags/"+got+"^{commit}"); err == nil && r != "" {
+		// A tag this checkout knows. Only a tag: a branch or @ names
+		// wherever the checkout is now, not what was built.
+		full = r
 	}
 	if !hexRE.MatchString(full) {
-		// Not a commit, and nothing here makes it one (a version, a tag
-		// from elsewhere): --build couldn't name it either.
+		// Not a commit, and nothing here makes it one (a version, a branch,
+		// a tag from elsewhere): --build couldn't name it either.
 		return b, refusal{fmt.Sprintf("%s says it was built from %q, which isn't a commit: have its setup print BUILD_COMMIT= with the commit's hash (the one stamped in the build), and BUILD_VERSION= for a version", b.From, got)}
 	}
 	// One may be short and the other whole, either way round: --build with
@@ -416,6 +421,7 @@ func checkBuild(c *contract, b roomBuild) (roomBuild, error) {
 		}
 		return b, nil
 	}
+	b.Commit = full // what a tag named, so the refused build shows its commit
 	what := "the contract is on " + short(want) + " (HEAD when it was placed)"
 	if c.Build != "" {
 		what = "the contract was placed to test " + short(want) + " (--build)"

@@ -225,6 +225,36 @@ class Provenance(Base):
         self.assertIn('built from "v1.0", which isn\'t a commit', reason)
         self.assertNotIn("--build v1.0", reason)
 
+    def test_a_branch_name_in_build_commit_is_refused(self):
+        # A branch (or @) names wherever the checkout is when the room
+        # starts, not what was built: the gap this check is for.
+        self.git("checkout", "-qb", "feature")
+        for name in ["feature", "@", "HEAD"]:
+            self.phone(f"echo BUILD_COMMIT={name}")
+            cid = self.place("x", "--cast", "thumb", early=3)
+            self.cli("wait", cid, check=3)
+            reason = self.status(cid)["status"]["thumb"]["reason"]
+            self.assertIn(f'built from "{name}", which isn\'t a commit', reason)
+            self.cli("close", cid)
+
+    def test_a_tag_is_resolved_and_a_refused_one_is_kept_as_its_commit(self):
+        tagged = self.head()
+        self.git("tag", "Release-1.2")  # capitals and all
+        self.phone("echo BUILD_COMMIT=Release-1.2")
+        cid = self.place("x", "--cast", "thumb")
+        self.cli("wait", cid)
+        s = self.status(cid)["status"]["thumb"]
+        self.assertEqual(s["state"], "back", s)
+        self.assertEqual(s["builds"][0]["commit"], tagged)
+        self.cli("close", cid)
+        write(os.path.join(self.project, "app.txt"), "two\n")
+        self.git("commit", "-qam", "two")
+        cid = self.place("x", "--cast", "thumb", early=3)
+        self.cli("wait", cid, check=3)
+        s = self.status(cid)["status"]["thumb"]
+        self.assertIn(f"--build {tagged} to test", s["reason"])
+        self.assertEqual(s["builds"][0]["commit"], tagged, s)
+
     def test_a_web_room_whose_work_changed_while_it_built_says_so(self):
         self.house()
         self.hire_file("member")
@@ -311,8 +341,11 @@ class Provenance(Base):
         self.cli("close", cid)
         checkout = os.path.join(self.books, "contracts", cid, ".checkout")
         self.assertTrue(os.path.isdir(checkout))
+        cut = checkout + "-1234"  # a copy killed before it was renamed into place
+        write(os.path.join(cut, "app.txt"), "one\n")
         self.cli("prune", "--older", "0h")
         self.assertFalse(os.path.exists(checkout))
+        self.assertFalse(os.path.exists(cut))
 
 
 class BaseSanity(Base):
